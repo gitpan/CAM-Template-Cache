@@ -9,7 +9,7 @@ CAM::Template::Cache - Template files with database storage
   use CAM::Template::Cache;
   CAM::Template::Cache->setDBH($dbh);
   CAM::Template::Cache->setExpiration(60*60); # seconds ago
-
+  
   my $key = $username.":".$pagetype;  # whatever you like
   my $template = new CAM::Template::Cache($key);
   $template->setExpiration(24*60*60); # seconds ago
@@ -46,17 +46,18 @@ use Carp;
 use CAM::Template;
 
 our @ISA = qw(CAM::Template);
-our $VERSION = '0.22';
+our $VERSION = '0.24';
 
 # global settings, can be overridden for the whole class or for
 # individual instances.
-my $global_expiration = 24*60*60;  # one day, in seconds
-my $global_dbh = undef;
-my $global_dbTablename = "TemplateCache";
+our $global_expiration = 24*60*60;  # one day, in seconds
+our $global_dbh = undef;
+our $global_dbTablename = "TemplateCache";
+our $global_uselock = 0;
 
-my $colname_key  = "TemplateCache_key";
-my $colname_time = "TemplateCache_time";
-my $colname_data = "TemplateCache_content";
+our $colname_key  = "TemplateCache_key";
+our $colname_time = "TemplateCache_time";
+our $colname_data = "TemplateCache_content";
 
 #==============================
 
@@ -65,8 +66,6 @@ my $colname_data = "TemplateCache_content";
 =over 4
 
 =cut
-
-#==============================
 
 #==============================
 
@@ -124,7 +123,6 @@ sub new
 
    return $self;
 }
-
 #==============================
 
 =item setDBH DBI_HANDLE
@@ -134,14 +132,12 @@ Set the global database handle for this package.  Use like this:
 
 =cut
 
-#==============================
 sub setDBH
 {
    my $pkg = shift; # unused
    my $val = shift;
    $global_dbh = $val;
 }
-
 #==============================
 
 =item setExpiration SECONDS
@@ -156,7 +152,6 @@ or like this:
 
 =cut
 
-#==============================
 sub setExpiration
 {
    my $self = shift;
@@ -171,8 +166,6 @@ sub setExpiration
       $global_expiration = $val;
    }
 }
-
-
 #==============================
 
 =item setTableName NAME
@@ -186,7 +179,6 @@ or like this:
 
 =cut
 
-#==============================
 sub setTableName
 {
    my $self = shift;
@@ -201,7 +193,24 @@ sub setTableName
       $global_dbTablename = $val;
    }
 }
+#==============================
 
+=item setUseLock 0|1
+
+Set the global preference for whether to lock the database table when
+doing a save (since save() does both a delete and an insert).  Turning
+off lock may lead to a (rare!) race condition where two inserts
+happen, leading to a duplicate record.  Turning on locking may lead to
+performance bottlenecks.  The default is off.
+
+=cut
+
+sub setUseLock
+{
+   my $pkg = shift; # unused
+   my $val = shift;
+   $global_uselock = $val;
+}
 #==============================
 
 =item isFresh
@@ -211,7 +220,6 @@ whether it is up to date.
 
 =cut
 
-#==============================
 sub isFresh
 {
    my $self = shift;
@@ -222,7 +230,8 @@ sub isFresh
    my $sth = $dbh->prepare("select *," .
                            "date_add(now(), interval -$$self{expiration} second) as expires " .
                            "from $$self{dbTablename} " .
-                           "where $colname_key=?");
+                           "where $colname_key=? " .
+                           "limit 1");
    $sth->execute($self->{cachekey});
    my $row = $sth->fetchrow_hashref();
    $sth->finish();
@@ -242,7 +251,24 @@ sub isFresh
    $self->{lastrow} = $row;
    return $self;
 }
+#==============================
 
+=item clear
+
+Invalidates the existing cached data for this key.
+
+=cut
+
+sub clear
+{
+   my $self = shift;
+
+   my $dbh = $self->{dbh};
+   return undef if (!defined $self->{cachekey});
+   $dbh->do("update $$self{dbTablename} set $colname_time='0000-00-00'" .
+            "where $colname_key=" . $dbh->quote($self->{cachekey}));
+   return $self;
+}
 #==============================
 
 =item toStringCache
@@ -252,7 +278,6 @@ already been called, information is recycled from that inquiry.
 
 =cut
 
-#==============================
 sub toStringCache
 {
    my $self = shift;
@@ -266,7 +291,6 @@ sub toStringCache
    }
    return $self->{lastrow}->{$colname_data};
 }
-
 #==============================
 
 =item printCache
@@ -277,7 +301,6 @@ recycled from that inquiry.
 
 =cut
 
-#==============================
 sub printCache
 {
    my $self = shift;
@@ -293,8 +316,6 @@ sub printCache
       return $self;
    }
 }
-
-
 #==============================
 
 =item save CONTENT
@@ -305,7 +326,6 @@ subclasses.
 
 =cut
 
-#==============================
 sub save
 {
    my $self = shift;
@@ -315,14 +335,14 @@ sub save
 
    my $dbh = $self->{dbh};
 
-   $dbh->do("lock table $$self{dbTablename} write");
+   $dbh->do("lock table $$self{dbTablename} write") if ($global_uselock);
    $dbh->do("delete from $$self{dbTablename} " .
             "where $colname_key=" . $dbh->quote($self->{cachekey}));
    my $result = $dbh->do("insert into $$self{dbTablename} set " .
                          "$colname_key=".$dbh->quote($self->{cachekey})."," .
                          "$colname_time=now()," .
                          "$colname_data=" . $dbh->quote($string));
-   $dbh->do("unlock table"); 
+   $dbh->do("unlock table") if ($global_uselock);
    if (!$result)
    {
       &carp("Failed to cache the template string");
@@ -330,7 +350,6 @@ sub save
    }
    return $self;
 }
-
 #==============================
 
 =item toString
@@ -340,7 +359,6 @@ the database.
 
 =cut
 
-#==============================
 sub toString
 {
    my $self = shift;
@@ -349,8 +367,6 @@ sub toString
    $self->save($string);
    return $string;
 }
-
-
 #==============================
 
 =item print
@@ -360,7 +376,6 @@ the database.
 
 =cut
 
-#==============================
 sub print
 {
    my $self = shift;
@@ -368,8 +383,6 @@ sub print
    # no work to do.  It's all done in toString.
    return $self->SUPER::print(@_);
 }
-
-
 #==============================
 
 =item setup
@@ -382,13 +395,11 @@ should be used in a separate script like this:
 
     use DBI;
     use CAM::Template::Cache;
-
     my $dbh = DBI->connect(...);
     CAM::Template::Cache->setup($dbh, "TemplateCache");
 
 =cut
 
-#==============================
 sub setup
 {
    if (!ref($_[0]))
@@ -398,12 +409,13 @@ sub setup
    my $dbh = shift || $global_dbh;
    my $tablename = shift || $global_dbTablename;
 
-   return  $dbh->do("create table if not exists $tablename (" .
-                    "$colname_key text," .
-                    "$colname_time timestamp," .
-                    "$colname_data mediumtext)");
+   my $result =$dbh->do("create table if not exists $tablename (" .
+                        "$colname_key text," .
+                        "$colname_time timestamp," .
+                        "$colname_data mediumtext)");
+   $dbh->do("create index TemplateCache_key on Templatecache ($colname_key(255))");
+   return $result;
 }
-
 #==============================
 
 =item clean
@@ -416,13 +428,11 @@ this, likely running as a cron:
 
     use DBI;
     use CAM::Template::Cache;
-
     my $dbh = DBI->connect(...);
     CAM::Template::Cache->clean($dbh, "TemplateCache", 2*60*60);
 
 =cut
 
-#==============================
 sub clean
 {
    if (!ref($_[0]))
@@ -437,6 +447,7 @@ sub clean
                    "where $colname_time < " .
                    "date_add(now(),interval -$seconds second)");
 }
+#==============================
 
 1;
 __END__
@@ -447,4 +458,6 @@ __END__
 
 Chris Dolan, Clotho Advanced Media, I<chris@clotho.com>
 
-=cut
+=head1 LICENSE
+
+GPLv2, see the COPYING file in this distribution.

@@ -1,3 +1,26 @@
+2003-03-26 08:53  chris
+
+	* Cache.pm: v0.24 Add clear() method to manually invalidate the
+	cache Change "my" globals to "our" Add mention of the License in
+	the POD Minor comment cleanup to shorten .pm file
+
+2003-03-09 10:17  chris
+
+	* Cache.pm: trivial doc fix
+
+2003-01-31 13:11  chris
+
+	* Cache.pm: Fix index command
+
+2003-01-31 11:26  tasc
+
+	* Cache.pm: Set locking default to off.
+
+2003-01-31 11:22  chris
+
+	* Cache.pm: v0.23 * Add an option to turn off table locking * Add
+	index creation to the seyup() function
+
 2003-01-17 10:57  chris
 
 	* Cache.pm: Make the template still work if there is not cachekey
