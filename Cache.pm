@@ -1,0 +1,438 @@
+package CAM::Template::Cache;
+
+=head1 NAME
+
+CAM::Template::Cache - Template files with database storage
+
+=head1 SYNOPSIS
+
+  use CAM::Template::Cache;
+  CAM::Template::Cache->setDBH($dbh);
+  CAM::Template::Cache->setExpiration(60*60); # seconds ago
+
+  my $key = $username.":".$pagetype;  # whatever you like
+  my $template = new CAM::Template::Cache($key);
+  $template->setExpiration(24*60*60); # seconds ago
+  if ($template->isFresh()) {
+     $template->printCache();
+  } else {
+     $template->setFilename($templateFilename);
+     $template->addParams(blah blah);
+     $template->print();
+  }
+
+=head1 DESCRIPTION
+
+CAM::Template provides an interface for parameter replacement in a
+template file.  This package provides the additional functionality of
+storing the completed template in a MySQL database for later quick
+retrieval.
+
+Use of the cached version of the template requires a unique key that
+will allow retrieval of the completed file, if present.  The cache
+uses a time stamp and an expiration interval (default: 1 day) to
+decide if the cached copy is recent enough.
+
+This module also includes the class methods setup() and clean() as
+convenience functions for initialization and maintenance of the cache
+database.
+
+=cut
+
+require 5.005_62;
+use strict;
+use warnings;
+use Carp;
+use CAM::Template;
+
+our @ISA = qw(CAM::Template);
+our $VERSION = '0.21';
+
+# global settings, can be overridden for the whole class or for
+# individual instances.
+my $global_expiration = 24*60*60;  # one day, in seconds
+my $global_dbh = undef;
+my $global_dbTablename = "TemplateCache";
+
+my $colname_key  = "TemplateCache_key";
+my $colname_time = "TemplateCache_time";
+my $colname_data = "TemplateCache_content";
+
+#==============================
+
+=head1 FUNCTIONS
+
+=over 4
+
+=cut
+
+#==============================
+
+#==============================
+
+=item new CACHEKEY
+
+=item new CACHEKEY, DBIHANDLE
+
+Create a new template object.  The cachekey is required, and must
+uniquely identify the content of interest.  If the database handle is
+not set here, it must have been set previously via the class method
+setDBH().
+
+Any additional function arguments (namely, a filename or replacement
+parameters) are passed on to the CAM::Template constructor.
+
+=cut
+
+sub new
+{
+   my $pkg = shift;
+   my $cachekey = shift;
+   my $dbh;
+   $dbh = shift if (ref $_[0]);
+
+   if ((!defined $cachekey) || ($cachekey eq ""))
+   {
+      &carp("No cache key specified");
+      return undef;
+   }
+
+   my $self = new CAM::Template(@_);
+   $self->{cachekey} = $cachekey;
+   $self->{expiration} = $global_expiration;
+   $self->{dbTablename} = $global_dbTablename;
+   $self->{dbh} = $dbh || $global_dbh;
+
+   if (!$self->{dbh})
+   {
+      &carp("No database connection has been specified.  Please use ".$pkg."::setDBH()");
+      return undef;
+   }
+   if (ref($self->{dbh}) !~ /^(DBI|DBD)\b/)
+   {
+      &carp("The DBH object is not a valid DBI/DBD connection: " . ref($self->{dbh}));
+      return undef;
+   }
+
+   return bless($self,$pkg);
+}
+
+#==============================
+
+=item setDBH DBI_HANDLE
+
+Set the global database handle for this package.  Use like this:
+  CAM::Template::Cache->setDBH($dbh);
+
+=cut
+
+#==============================
+sub setDBH
+{
+   my $pkg = shift; # unused
+   my $val = shift;
+   $global_dbh = $val;
+}
+
+#==============================
+
+=item setExpiration SECONDS
+
+Set the duration for the cached content.  If the cache is older than
+the specified time, the isFresh() method will return false.
+
+Use like this:
+  CAM::Template::Cache->setExpiration($seconds);
+or like this:
+  $template->setExpiration($seconds);
+
+=cut
+
+#==============================
+sub setExpiration
+{
+   my $self = shift;
+   my $val = shift;
+
+   if (ref $self)
+   {
+      $self->{expiration} = $val;
+   }
+   else
+   {
+      $global_expiration = $val;
+   }
+}
+
+
+#==============================
+
+=item setTableName NAME
+
+Set the name of the database table that is used for the cache.
+
+Use like this:
+  CAM::Template::Cache->setTableName($name);
+or like this:
+  $template->setTableName($name);
+
+=cut
+
+#==============================
+sub setTableName
+{
+   my $self = shift;
+   my $val = shift;
+
+   if (ref $self)
+   {
+      $self->{dbTablename} = $val;
+   }
+   else
+   {
+      $global_dbTablename = $val;
+   }
+}
+
+#==============================
+
+=item isFresh
+
+Returns a boolean indicating whether the cache is present and
+whether it is up to date.
+
+=cut
+
+#==============================
+sub isFresh
+{
+   my $self = shift;
+
+   my $dbh = $self->{dbh};
+   my $sth = $dbh->prepare("select *," .
+                           "date_add(now(), interval -$$self{expiration} second) as expires " .
+                           "from $$self{dbTablename} " .
+                           "where $colname_key=?");
+   $sth->execute($self->{cachekey});
+   my $row = $sth->fetchrow_hashref();
+   $sth->finish();
+
+   return undef if (!$row);
+
+   $row->{$colname_time} =~ s/\D//g;
+   $row->{expires} =~ s/\D//g;
+
+   if ($row->{$colname_time} lt $row->{expires})
+   {
+      $dbh->do("delete from $$self{dbTablename} " .
+               "where $colname_key=" . $dbh->quote($self->{cachekey}));
+      return undef;
+   }
+
+   $self->{lastrow} = $row;
+   return $self;
+}
+
+#==============================
+
+=item toStringCache
+
+Returns the cached content, or undef on failure.  If isFresh() has
+already been called, information is recycled from that inquiry.
+
+=cut
+
+#==============================
+sub toStringCache
+{
+   my $self = shift;
+
+   if (!$self->{lastrow})
+   {
+      if (!$self->isFresh())
+      {
+         return undef;
+      }
+   }
+   return $self->{lastrow}->{$colname_data};
+}
+
+#==============================
+
+=item printCache
+
+Prints the cached content.  Returns a boolean indicating success or
+failure.  If isFresh() has already been called, information is
+recycled from that inquiry.
+
+=cut
+
+#==============================
+sub printCache
+{
+   my $self = shift;
+
+   my $content = $self->toStringCache();
+   if (!defined $content)
+   {
+      return undef;
+   }
+   else
+   {
+      print $content;
+      return $self;
+   }
+}
+
+
+#==============================
+
+=item save CONTENT
+
+Record the content in the database.  This is typically only called
+from within toString(), but is provided here for the benefit of
+subclasses.
+
+=cut
+
+#==============================
+sub save
+{
+   my $self = shift;
+   my $string = shift;
+
+   my $dbh = $self->{dbh};
+
+   $dbh->do("lock table $$self{dbTablename} write");
+   $dbh->do("delete from $$self{dbTablename} " .
+            "where $colname_key=" . $dbh->quote($self->{cachekey}));
+   my $result = $dbh->do("insert into $$self{dbTablename} set " .
+                         "$colname_key=".$dbh->quote($self->{cachekey})."," .
+                         "$colname_time=now()," .
+                         "$colname_data=" . $dbh->quote($string));
+   $dbh->do("unlock table"); 
+   if (!$result)
+   {
+      &carp("Failed to cache the template string");
+      return undef;
+   }
+   return $self;
+}
+
+#==============================
+
+=item toString
+
+Same as CAM::Template->toString except that the result is stored in
+the database.
+
+=cut
+
+#==============================
+sub toString
+{
+   my $self = shift;
+
+   my $string = $self->SUPER::toString(@_);
+   $self->save($string);
+   return $string;
+}
+
+
+#==============================
+
+=item print
+
+Same as CAM::Template->print except that the result is stored in
+the database.
+
+=cut
+
+#==============================
+sub print
+{
+   my $self = shift;
+
+   # no work to do.  It's all done in toString.
+   return $self->SUPER::print(@_);
+}
+
+
+#==============================
+
+=item setup
+
+=item setup DBIHANDLE, TABLENAME
+
+Create a database table for storing cached templates.  This is not
+intended to be called often, if ever.  This is a class method.  It
+should be used in a separate script like this:
+
+    use DBI;
+    use CAM::Template::Cache;
+
+    my $dbh = DBI->connect(...);
+    CAM::Template::Cache->setup($dbh, "TemplateCache");
+
+=cut
+
+#==============================
+sub setup
+{
+   if (!ref($_[0]))
+   {
+      shift;  # skip package name, if applicable
+   }
+   my $dbh = shift || $global_dbh;
+   my $tablename = shift || $global_dbTablename;
+
+   return  $dbh->do("create table if not exists $tablename (" .
+                    "$colname_key text," .
+                    "$colname_time timestamp," .
+                    "$colname_data mediumtext)");
+}
+
+#==============================
+
+=item clean
+
+=item clean DBIHANDLE, TABLENAME, SECONDS
+
+Cleans out all records older than the specified number of seconds.
+This is a class method.  It should be used in a separate script like
+this, likely running as a cron:
+
+    use DBI;
+    use CAM::Template::Cache;
+
+    my $dbh = DBI->connect(...);
+    CAM::Template::Cache->clean($dbh, "TemplateCache", 2*60*60);
+
+=cut
+
+#==============================
+sub clean
+{
+   if (!ref($_[0]))
+   {
+      shift;  # skip package name, if applicable
+   }
+   my $dbh = shift || $global_dbh;
+   my $tablename = shift || $global_dbTablename;
+   my $seconds = shift || $global_expiration;
+
+   return $dbh->do("delete from $tablename " .
+                   "where $colname_time < " .
+                   "date_add(now(),interval -$seconds second)");
+}
+
+1;
+__END__
+
+=back
+
+=head1 AUTHOR
+
+Chris Dolan, Clotho Advanced Media, I<chris@clotho.com>
+
+=cut
