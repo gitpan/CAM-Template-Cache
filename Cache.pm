@@ -46,7 +46,7 @@ use Carp;
 use CAM::Template;
 
 our @ISA = qw(CAM::Template);
-our $VERSION = '0.21';
+our $VERSION = '0.22';
 
 # global settings, can be overridden for the whole class or for
 # individual instances.
@@ -70,14 +70,19 @@ my $colname_data = "TemplateCache_content";
 
 #==============================
 
+=item new
+
 =item new CACHEKEY
 
 =item new CACHEKEY, DBIHANDLE
 
-Create a new template object.  The cachekey is required, and must
-uniquely identify the content of interest.  If the database handle is
-not set here, it must have been set previously via the class method
-setDBH().
+Create a new template object.  To get the caching functionality, the
+cachekey is required, and must uniquely identify the content of
+interest.  If the cachekey is not specified, then this template
+behaves without any of the caching infrastructure.
+
+If the database handle is not set here, it must have been
+set previously via the class method setDBH().
 
 Any additional function arguments (namely, a filename or replacement
 parameters) are passed on to the CAM::Template constructor.
@@ -91,30 +96,33 @@ sub new
    my $dbh;
    $dbh = shift if (ref $_[0]);
 
-   if ((!defined $cachekey) || ($cachekey eq ""))
-   {
-      &carp("No cache key specified");
-      return undef;
-   }
+   #if ((!defined $cachekey) || ($cachekey eq ""))
+   #{
+   #   &carp("No cache key specified");
+   #   return undef;
+   #}
 
-   my $self = new CAM::Template(@_);
+   my $self = $pkg->SUPER::new(@_);
    $self->{cachekey} = $cachekey;
    $self->{expiration} = $global_expiration;
    $self->{dbTablename} = $global_dbTablename;
    $self->{dbh} = $dbh || $global_dbh;
 
-   if (!$self->{dbh})
+   if (defined $self->{cachekey})
    {
-      &carp("No database connection has been specified.  Please use ".$pkg."::setDBH()");
-      return undef;
-   }
-   if (ref($self->{dbh}) !~ /^(DBI|DBD)\b/)
-   {
-      &carp("The DBH object is not a valid DBI/DBD connection: " . ref($self->{dbh}));
-      return undef;
+      if (!$self->{dbh})
+      {
+         &carp("No database connection has been specified.  Please use ".$pkg."::setDBH()");
+         return undef;
+      }
+      if (ref($self->{dbh}) !~ /^(DBI|DBD)\b/)
+      {
+         &carp("The DBH object is not a valid DBI/DBD connection: " . ref($self->{dbh}));
+         return undef;
+      }
    }
 
-   return bless($self,$pkg);
+   return $self;
 }
 
 #==============================
@@ -208,6 +216,8 @@ sub isFresh
 {
    my $self = shift;
 
+   return undef if (!defined $self->{cachekey});
+
    my $dbh = $self->{dbh};
    my $sth = $dbh->prepare("select *," .
                            "date_add(now(), interval -$$self{expiration} second) as expires " .
@@ -300,6 +310,8 @@ sub save
 {
    my $self = shift;
    my $string = shift;
+
+   return undef if (!defined $self->{cachekey});
 
    my $dbh = $self->{dbh};
 
