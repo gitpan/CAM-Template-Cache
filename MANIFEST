@@ -1,7 +1,10 @@
-Cache.pm
+index.html
+lib/CAM/Template/Cache.pm
 ChangeLog
-COPYRIGHT
+LICENSE
+Build.PL
 Makefile.PL
 MANIFEST
 README
 test.pl
+META.yml

@@ -4,6 +4,13 @@ package CAM::Template::Cache;
 
 CAM::Template::Cache - Template files with database storage
 
+=head1 LICENSE
+
+Copyright 2005 Clotho Advanced Media, Inc., <cpan@clotho.com>
+
+This library is free software; you can redistribute it and/or modify it
+under the same terms as Perl itself.
+
 =head1 SYNOPSIS
 
   use CAM::Template::Cache;
@@ -46,7 +53,7 @@ use Carp;
 use CAM::Template;
 
 our @ISA = qw(CAM::Template);
-our $VERSION = '0.24';
+our $VERSION = '0.91';
 
 # global settings, can be overridden for the whole class or for
 # individual instances.
@@ -59,7 +66,7 @@ our $colname_key  = "TemplateCache_key";
 our $colname_time = "TemplateCache_time";
 our $colname_data = "TemplateCache_content";
 
-#==============================
+#--------------------------
 
 =head1 FUNCTIONS
 
@@ -67,7 +74,7 @@ our $colname_data = "TemplateCache_content";
 
 =cut
 
-#==============================
+#--------------------------
 
 =item new
 
@@ -95,12 +102,6 @@ sub new
    my $dbh;
    $dbh = shift if (ref $_[0]);
 
-   #if ((!defined $cachekey) || ($cachekey eq ""))
-   #{
-   #   &carp("No cache key specified");
-   #   return undef;
-   #}
-
    my $self = $pkg->SUPER::new(@_);
    $self->{cachekey} = $cachekey;
    $self->{expiration} = $global_expiration;
@@ -123,11 +124,12 @@ sub new
 
    return $self;
 }
-#==============================
+#--------------------------
 
 =item setDBH DBI_HANDLE
 
 Set the global database handle for this package.  Use like this:
+
   CAM::Template::Cache->setDBH($dbh);
 
 =cut
@@ -138,7 +140,7 @@ sub setDBH
    my $val = shift;
    $global_dbh = $val;
 }
-#==============================
+#--------------------------
 
 =item setExpiration SECONDS
 
@@ -146,8 +148,11 @@ Set the duration for the cached content.  If the cache is older than
 the specified time, the isFresh() method will return false.
 
 Use like this:
+
   CAM::Template::Cache->setExpiration($seconds);
+
 or like this:
+
   $template->setExpiration($seconds);
 
 =cut
@@ -166,15 +171,18 @@ sub setExpiration
       $global_expiration = $val;
    }
 }
-#==============================
+#--------------------------
 
 =item setTableName NAME
 
 Set the name of the database table that is used for the cache.
 
 Use like this:
+
   CAM::Template::Cache->setTableName($name);
+
 or like this:
+
   $template->setTableName($name);
 
 =cut
@@ -193,7 +201,7 @@ sub setTableName
       $global_dbTablename = $val;
    }
 }
-#==============================
+#--------------------------
 
 =item setUseLock 0|1
 
@@ -211,7 +219,7 @@ sub setUseLock
    my $val = shift;
    $global_uselock = $val;
 }
-#==============================
+#--------------------------
 
 =item isFresh
 
@@ -251,25 +259,39 @@ sub isFresh
    $self->{lastrow} = $row;
    return $self;
 }
-#==============================
+#--------------------------
 
 =item clear
 
-Invalidates the existing cached data for this key.
+=item clear CACHEKEY
+
+Invalidates the existing cached data for this key.  This can be called
+as a class method, in which case the cache key argument is required.
+As an instance method, the instance's key is used if a key is not
+passed as an argument.
 
 =cut
 
 sub clear
 {
-   my $self = shift;
-
-   my $dbh = $self->{dbh};
-   return undef if (!defined $self->{cachekey});
-   $dbh->do("update $$self{dbTablename} set $colname_time='0000-00-00'" .
-            "where $colname_key=" . $dbh->quote($self->{cachekey}));
-   return $self;
+   my $pkg_or_self = shift;
+   my $key = shift;
+   
+   my $dbh = $global_dbh;
+   my $dbtable = $global_dbTablename;
+   if (ref($pkg_or_self))
+   {
+      my $self = $pkg_or_self;
+      $key ||= $self->{cachekey};
+      $dbh = $self->{dbh};
+      $dbtable = $self->{dbTablename};
+   }
+   return undef unless ($key && $dbh);
+   $dbh->do("update $dbtable set $colname_time='0000-00-00'" .
+            "where $colname_key=" . $dbh->quote($key));
+   return $pkg_or_self;
 }
-#==============================
+#--------------------------
 
 =item toStringCache
 
@@ -291,7 +313,7 @@ sub toStringCache
    }
    return $self->{lastrow}->{$colname_data};
 }
-#==============================
+#--------------------------
 
 =item printCache
 
@@ -316,7 +338,7 @@ sub printCache
       return $self;
    }
 }
-#==============================
+#--------------------------
 
 =item save CONTENT
 
@@ -350,7 +372,7 @@ sub save
    }
    return $self;
 }
-#==============================
+#--------------------------
 
 =item toString
 
@@ -367,7 +389,7 @@ sub toString
    $self->save($string);
    return $string;
 }
-#==============================
+#--------------------------
 
 =item print
 
@@ -383,7 +405,7 @@ sub print
    # no work to do.  It's all done in toString.
    return $self->SUPER::print(@_);
 }
-#==============================
+#--------------------------
 
 =item setup
 
@@ -409,14 +431,15 @@ sub setup
    my $dbh = shift || $global_dbh;
    my $tablename = shift || $global_dbTablename;
 
-   my $result =$dbh->do("create table if not exists $tablename (" .
-                        "$colname_key text," .
-                        "$colname_time timestamp," .
-                        "$colname_data mediumtext)");
-   $dbh->do("create index TemplateCache_key on Templatecache ($colname_key(255))");
+   my $result = $dbh->do("create table if not exists $tablename (" .
+                         "$colname_key text not null," .
+                         "$colname_time timestamp," .
+                         "$colname_data mediumtext," .
+                         "KEY $colname_key ($colname_key(255))" .
+                         ")");
    return $result;
 }
-#==============================
+#--------------------------
 
 =item clean
 
@@ -443,11 +466,13 @@ sub clean
    my $tablename = shift || $global_dbTablename;
    my $seconds = shift || $global_expiration;
 
+   return 1 if (!$seconds); # no time means no expiration
+
    return $dbh->do("delete from $tablename " .
                    "where $colname_time < " .
                    "date_add(now(),interval -$seconds second)");
 }
-#==============================
+#--------------------------
 
 1;
 __END__
@@ -456,8 +481,6 @@ __END__
 
 =head1 AUTHOR
 
-Chris Dolan, Clotho Advanced Media, I<chris@clotho.com>
+Clotho Advanced Media Inc., I<cpan@clotho.com>
 
-=head1 LICENSE
-
-GPLv2, see the COPYING file in this distribution.
+Primary developer: Chris Dolan

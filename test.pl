@@ -1,10 +1,13 @@
-# Start, and a compile test
+#!/usr/bin/perl -w
 
-BEGIN { $| = 1; print "1..1\n"; }
-END {print "not ok 1\n" unless $loaded;}
-use CAM::Template::Cache;
-$loaded = 1;
-print "ok 1\n";
+use warnings;
+use strict;
+
+BEGIN
+{
+   use Test::More tests => 1;
+   use_ok("CAM::Template::Cache");
+}
 
 #### SORRY, I know this is pathetically inadequate testing...  It will
 #### be written in a future version, I hope.
